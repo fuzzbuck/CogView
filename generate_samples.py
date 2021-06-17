@@ -60,11 +60,13 @@ def setup_model(args):
             if not args.offload:
                 checkpoint = torch.load(path, map_location=lambda storage, loc: storage.cuda(torch.cuda.current_device()))
             else:
+                print("loading model on cpu (offload)")
                 checkpoint = torch.load(path, map_location=torch.device('cpu'))
 
             model.load_state_dict(checkpoint["module"])
 
             if args.offload:
+                print("transfering model from cpu -> cuda")
                 model = model.half().cuda()
             model.load_state_dict(checkpoint["module"])
             print(f"Load model file {path}")
