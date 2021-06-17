@@ -20,7 +20,7 @@ import random
 
 import torch
 import torch.nn.init as init
-from apex.normalization.fused_layer_norm import FusedLayerNorm #as LayerNorm
+from apex.normalization.fused_layer_norm import FusedLayerNorm  # as LayerNorm
 
 from .initialize import get_model_parallel_world_size
 from .layers import ColumnParallelLinear
@@ -40,8 +40,10 @@ import torch.distributed as dist
 class LayerNorm(FusedLayerNorm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+
     def forward(self, x):
-        return super().forward(x / (x.abs().max().detach()/8))
+        return super().forward(x / (x.abs().max().detach() / 8))
+
 
 class GPT2ParallelSelfAttention(torch.nn.Module):
     """Parallel self-attention layer for GPT2.
@@ -69,6 +71,7 @@ class GPT2ParallelSelfAttention(torch.nn.Module):
         b: batch size
         s: sequence length
     """
+
     def __init__(self, hidden_size, num_attention_heads,
                  attention_dropout_prob, output_dropout_prob,
                  init_method, output_layer_init_method=None, query_window=128, key_window_times=6):
@@ -87,7 +90,7 @@ class GPT2ParallelSelfAttention(torch.nn.Module):
         self.key_window_times = key_window_times
 
         # Strided linear layer.
-        self.query_key_value = ColumnParallelLinear(hidden_size, 3*hidden_size,
+        self.query_key_value = ColumnParallelLinear(hidden_size, 3 * hidden_size,
                                                     stride=3,
                                                     gather_output=False,
                                                     init_method=init_method)
@@ -119,7 +122,6 @@ class GPT2ParallelSelfAttention(torch.nn.Module):
         tensor = tensor.view(*new_tensor_shape)
         return tensor.permute(0, 2, 1, 3)
 
-
     def forward(self, hidden_states, ltor_mask, pivot_idx=None, is_sparse=0, mem=None):
         # hidden_states: [b, s, h]
         # ltor_mask: [1, 1, s, s]
@@ -147,12 +149,13 @@ class GPT2ParallelSelfAttention(torch.nn.Module):
 
         # =====================   Core Attention Code  ======================== #
         if is_sparse == 1:
-            context_layer = sparse_attention(query_layer, key_layer, value_layer, pivot_idx, ltor_mask, self.query_window, self.key_window_times, self.attention_dropout)
+            context_layer = sparse_attention(query_layer, key_layer, value_layer, pivot_idx, ltor_mask,
+                                             self.query_window, self.key_window_times, self.attention_dropout)
         elif is_sparse == 2:
             context_layer = sparse_attention_inference(query_layer, key_layer, value_layer, pivot_idx)
         else:
             context_layer = standard_attention(query_layer, key_layer, value_layer, ltor_mask, self.attention_dropout)
-        
+
         # ===================== END OF BLOCK ======================= #
 
         # [b, s, np, hn]
@@ -171,20 +174,24 @@ class GPT2ParallelSelfAttention(torch.nn.Module):
 
 @torch.jit.script
 def gelu_impl(x):
-     """OpenAI's gelu implementation."""
-     return 0.5 * x * (1.0 + torch.tanh(0.7978845608028654 * x *
-                                        (1.0 + 0.044715 * x * x)))
+    """OpenAI's gelu implementation."""
+    return 0.5 * x * (1.0 + torch.tanh(0.7978845608028654 * x *
+                                       (1.0 + 0.044715 * x * x)))
 
-def gelu(x): 
+
+def gelu(x):
     return gelu_impl(x)
+
 
 @torch.jit.script
 def elu1_impl(x):
-     """OpenAI's gelu implementation."""
-     return torch.nn.functional.elu(x) + 1.
+    """OpenAI's gelu implementation."""
+    return torch.nn.functional.elu(x) + 1.
+
 
 def elu1(x):
     return elu1_impl(x)
+
 
 class GPT2ParallelMLP(torch.nn.Module):
     """MLP for GPT2.
@@ -212,12 +219,12 @@ class GPT2ParallelMLP(torch.nn.Module):
         if output_layer_init_method is None:
             output_layer_init_method = init_method
         # Project to 4h.
-        self.dense_h_to_4h = ColumnParallelLinear(hidden_size, 4*hidden_size,
+        self.dense_h_to_4h = ColumnParallelLinear(hidden_size, 4 * hidden_size,
                                                   gather_output=False,
                                                   init_method=init_method)
         # Project back to h.
         self.dense_4h_to_h = RowParallelLinear(
-            4*hidden_size,
+            4 * hidden_size,
             hidden_size,
             input_is_parallel=True,
             init_method=output_layer_init_method)
@@ -262,6 +269,7 @@ class GPT2ParallelTransformerLayer(torch.nn.Module):
                                   mlp output) initialization. If None,
                                   use `init_method`.
     """
+
     def __init__(self,
                  hidden_size,
                  num_attention_heads,
@@ -282,7 +290,6 @@ class GPT2ParallelTransformerLayer(torch.nn.Module):
         # Layernorm on the input data.
         self.input_layernorm = LayerNorm(hidden_size, eps=layernorm_epsilon)
 
-
         # Self attention.
         self.attention = GPT2ParallelSelfAttention(
             hidden_size,
@@ -300,9 +307,9 @@ class GPT2ParallelTransformerLayer(torch.nn.Module):
         self.scale_normalization = scale_normalization
         if scale_normalization:
             self.third_layernorm = LayerNorm(hidden_size,
-                                                    eps=layernorm_epsilon)
+                                             eps=layernorm_epsilon)
             self.fourth_layernorm = LayerNorm(hidden_size,
-                                                    eps=layernorm_epsilon)
+                                              eps=layernorm_epsilon)
 
         # MLP
         self.mlp = GPT2ParallelMLP(
@@ -341,8 +348,10 @@ class GPT2ParallelTransformerLayer(torch.nn.Module):
 
         return output
 
+
 def unscaled_init_method(sigma):
     """Init method based on N(0, sigma)."""
+
     def init_(tensor):
         return torch.nn.init.normal_(tensor, mean=0.0, std=sigma)
 
@@ -352,6 +361,7 @@ def unscaled_init_method(sigma):
 def scaled_init_method(sigma, num_layers):
     """Init method based on N(0, sigma/sqrt(2*num_layers)."""
     std = sigma / math.sqrt(2.0 * num_layers)
+
     def init_(tensor):
         return torch.nn.init.normal_(tensor, mean=0.0, std=std)
 
@@ -392,6 +402,7 @@ class GPT2ParallelTransformer(torch.nn.Module):
                                             scaling for the output weights (
                                             output of self attention and mlp).
     """
+
     def __init__(self,
                  num_layers,
                  hidden_size,
@@ -420,22 +431,21 @@ class GPT2ParallelTransformer(torch.nn.Module):
         output_layer_init_method = None
         if use_scaled_init_for_output_weights:
             output_layer_init_method = scaled_init_method(init_method_std,
-                                                      num_layers)
+                                                          num_layers)
         # Embeddings dropout
         self.embedding_dropout = torch.nn.Dropout(embedding_dropout_prob)
 
         # Position embedding (serial).
         self.position_embeddings = torch.nn.Embedding(max_sequence_length,
-                                                        hidden_size)
+                                                      hidden_size)
         # Initialize the position embeddings.
         torch.nn.init.normal_(self.position_embeddings.weight, mean=0.0, std=init_method_std)
 
         # TODO: after testing, this is not useful.
-        # self.img_type_embeddings = torch.nn.Parameter(torch.Tensor(64, hidden_size)) 
+        # self.img_type_embeddings = torch.nn.Parameter(torch.Tensor(64, hidden_size))
         # torch.nn.init.normal_(self.img_type_embeddings, mean=0.0, std=init_method_std)
-        # self.txt_type_embeddings = torch.nn.Parameter(torch.Tensor(hidden_size)) 
+        # self.txt_type_embeddings = torch.nn.Parameter(torch.Tensor(hidden_size))
         # torch.nn.init.normal_(self.txt_type_embeddings, mean=0.0, std=init_method_std)
-
 
         def get_layer(layer_id):
             return GPT2ParallelTransformerLayer(
@@ -449,7 +459,7 @@ class GPT2ParallelTransformer(torch.nn.Module):
                 query_window=query_window,
                 key_window_times=key_window_times,
                 scale_normalization=True
-                )
+            )
 
         self.query_window = query_window
         self.key_window_times = key_window_times
@@ -457,7 +467,7 @@ class GPT2ParallelTransformer(torch.nn.Module):
 
         # Transformer layers.
         self.layers = torch.nn.ModuleList(
-            [get_layer(layer_id) for layer_id in range(num_layers)])
+            [get_layer(layer_id).half().cuda() for layer_id in range(num_layers)])
 
         # Final layer norm before output.
         self.final_layernorm = LayerNorm(hidden_size, eps=layernorm_epsilon)
@@ -468,7 +478,8 @@ class GPT2ParallelTransformer(torch.nn.Module):
             checkpoint = deepspeed.checkpointing.checkpoint
         self.rmask = None
 
-    def forward(self, hidden_states, position_ids, attention_mask, txt_indices_bool, img_indices_bool, is_sparse=0, *mems):
+    def forward(self, hidden_states, position_ids, attention_mask, txt_indices_bool, img_indices_bool, is_sparse=0,
+                *mems):
 
         batch_size, query_length = hidden_states.size()[:2]
         memory_length = mems[0].size(1) if mems else 0
@@ -478,6 +489,7 @@ class GPT2ParallelTransformer(torch.nn.Module):
             # if given a int "sep", means the seperation of full attention part and single direction part
             # attention mask is the beginning postion of B region, \in [0, query_len)
             sep = attention_mask
+
             # conventional transformer
             def build_mask_matrix(query_length, key_length, sep):
                 m = torch.ones((1, query_length, key_length), device=hidden_states.device, dtype=hidden_states.dtype)
@@ -486,22 +498,25 @@ class GPT2ParallelTransformer(torch.nn.Module):
                 m[0, :, :sep + (key_length - query_length)] = 1
                 m = m.unsqueeze(1)
                 return m
+
             attention_mask = build_mask_matrix(query_length, key_length, sep)
 
         if is_sparse == 1 and (self.rmask is None):
             w, times = self.query_window, self.key_window_times
             g = key_length // w
-            tmp = torch.ones((g-times+1, w , w), device=hidden_states.device, dtype=hidden_states.dtype)
+            tmp = torch.ones((g - times + 1, w, w), device=hidden_states.device, dtype=hidden_states.dtype)
             tmp = torch.tril(1 - torch.block_diag(*tmp))
-            self.rmask = torch.nn.functional.pad(tmp, (0, (times-1)*w, (times-1)*w, 0)) # pad (left, right, top, bottom)  
+            self.rmask = torch.nn.functional.pad(tmp, (
+            0, (times - 1) * w, (times - 1) * w, 0))  # pad (left, right, top, bottom)
 
         if is_sparse == 2:
             left_boundary = max(0, key_length - self.key_window_times * self.query_window)
-            window_idx = torch.arange(left_boundary, key_length, device=hidden_states.device, dtype=torch.long).expand(batch_size, -1)
+            window_idx = torch.arange(left_boundary, key_length, device=hidden_states.device, dtype=torch.long).expand(
+                batch_size, -1)
         elif is_sparse == 1:
             left_boundary = key_length
             num_pivot = self.num_pivot
-                
+
         # =====================   Image & Text Type Embedding   ======================== #
         # TODO: after testing, this is not useful.
         # extend_len = (key_length + 63) // 64
@@ -509,13 +524,15 @@ class GPT2ParallelTransformer(torch.nn.Module):
         #     img_indices_bool.unsqueeze(-1) * self.img_type_embeddings.expand(extend_len, 64, -1).reshape(extend_len * 64, -1)[memory_length: key_length]
         # ===================== END OF BLOCK ======================= #
 
-        if is_sparse: # 1 or 2                
+        if is_sparse:  # 1 or 2
             # select out the real indices for sampling
-            img_indices = [img_indices_bool[i][:left_boundary].nonzero(as_tuple=False).view(-1) for i in range(batch_size)]
-            txt_indices = [txt_indices_bool[i][:left_boundary].nonzero(as_tuple=False).view(-1) for i in range(batch_size)]
-        
+            img_indices = [img_indices_bool[i][:left_boundary].nonzero(as_tuple=False).view(-1) for i in
+                           range(batch_size)]
+            txt_indices = [txt_indices_bool[i][:left_boundary].nonzero(as_tuple=False).view(-1) for i in
+                           range(batch_size)]
+
         if is_sparse == 2:
-            ratio = self.num_pivot / self.max_sequence_length 
+            ratio = self.num_pivot / self.max_sequence_length
             max_text_num = max(len(text_idx) for text_idx in txt_indices)
             num_pivot = max_text_num + int((left_boundary - max_text_num) * ratio)
 
@@ -527,11 +544,12 @@ class GPT2ParallelTransformer(torch.nn.Module):
             mem_layers = [hidden_states.detach()]
         else:
             mem_layers = []
+
         def custom(start, end):
             def custom_forward(*inputs):
                 layers_ = self.layers[start:end]
                 x_, inputs = inputs[0], inputs[1:]
-                    
+
                 if is_sparse > 0:
                     inputs, mems_ = inputs[:3], inputs[3:]
                 else:
@@ -543,10 +561,11 @@ class GPT2ParallelTransformer(torch.nn.Module):
                     if self.max_memory_length > 0:
                         mem_layers.append(x_.detach())
                 return x_
+
             return custom_forward
 
         attention_mask_saved = attention_mask
-        
+
         if self.checkpoint_activations:
             l = 0
             num_layers = len(self.layers)
@@ -558,17 +577,21 @@ class GPT2ParallelTransformer(torch.nn.Module):
                         torch.cat((
                             text_idx,
                             img_indices[i][
-                                torch.tensor(random.sample(range(len(img_indices[i])), k=num_pivot - len(text_idx)), dtype=torch.long, device=text_idx.device)
+                                torch.tensor(random.sample(range(len(img_indices[i])), k=num_pivot - len(text_idx)),
+                                             dtype=torch.long, device=text_idx.device)
                             ]
                         ), dim=0)
                         for i, text_idx in enumerate(txt_indices)
                     ])
-                    if is_sparse == 1: # sparse training
+                    if is_sparse == 1:  # sparse training
                         assert key_length == query_length
                         b, s = batch_size, key_length
-                        pivot_attention_mask = self.rmask.expand(b, s, s).gather(dim=-1, index=pivot_idx.unsqueeze(1).expand(b, s, self.num_pivot))
+                        pivot_attention_mask = self.rmask.expand(b, s, s).gather(dim=-1,
+                                                                                 index=pivot_idx.unsqueeze(1).expand(b,
+                                                                                                                     s,
+                                                                                                                     self.num_pivot))
                         args = [hidden_states, pivot_attention_mask, pivot_idx, torch.tensor(is_sparse)]
-                    elif is_sparse == 2: # sparse inference
+                    elif is_sparse == 2:  # sparse inference
                         pw_idx = torch.cat((pivot_idx, window_idx), dim=-1)
                         args = [hidden_states, attention_mask_saved, pw_idx, torch.tensor(is_sparse)]
                     else:
@@ -592,7 +615,8 @@ class GPT2ParallelTransformer(torch.nn.Module):
                         torch.cat((
                             text_idx,
                             img_indices[i][
-                                torch.tensor(random.sample(range(len(img_indices[i])), k=num_pivot - len(text_idx)), dtype=torch.long, device=text_idx.device)
+                                torch.tensor(random.sample(range(len(img_indices[i])), k=num_pivot - len(text_idx)),
+                                             dtype=torch.long, device=text_idx.device)
                             ]
                         ), dim=0)
                         for i, text_idx in enumerate(txt_indices)
@@ -622,9 +646,9 @@ class GPT2ParallelTransformer(torch.nn.Module):
                 if new_memory_length <= query_length:
                     new_mems.append(hiddens[i][:, -new_memory_length:])
                 else:
-                    new_mems.append(torch.cat((mems[i][:, -new_memory_length+query_length:], hiddens[i]), dim=1))
+                    new_mems.append(torch.cat((mems[i][:, -new_memory_length + query_length:], hiddens[i]), dim=1))
         return new_mems
-        
+
 
 def _chunk(x, w, times):
     '''convert into overlapping chunkings. Chunk size = times * w, overlap size = w
@@ -635,10 +659,10 @@ def _chunk(x, w, times):
     s = x.size(2)
     # x pad to [b, np, s+xx to k*w + w*(times-1), hn]
     assert s % w == 0
-    npad = (times-1) * w
+    npad = (times - 1) * w
     x = torch.nn.functional.pad(x, (0, 0, npad, 0), value=0)
 
-    x = x.view(x.size(0), x.size(1),  x.size(2) // w, w, x.size(3))
+    x = x.view(x.size(0), x.size(1), x.size(2) // w, w, x.size(3))
 
     chunk_size = list(x.size())
     chunk_stride = list(x.stride())
@@ -649,9 +673,10 @@ def _chunk(x, w, times):
 
     return x.as_strided(size=chunk_size, stride=chunk_stride)
 
+
 def standard_attention(query_layer, key_layer, value_layer, attention_mask, attention_dropout=None):
-    # We disable the PB-relax-Attention and only changes the order of computation, because it is enough for most of training. 
-    # The implementation in the paper can be done very easily, if you really need it to train very deep transformers. 
+    # We disable the PB-relax-Attention and only changes the order of computation, because it is enough for most of training.
+    # The implementation in the paper can be done very easily, if you really need it to train very deep transformers.
 
     if len(attention_mask.shape) == 3:
         attention_mask = attention_mask.unsqueeze(1)
@@ -660,7 +685,7 @@ def standard_attention(query_layer, key_layer, value_layer, attention_mask, atte
 
     # Apply the left to right attention mask.
     attention_scores = torch.mul(attention_scores, attention_mask) - \
-                    10000.0 * (1.0 - attention_mask)
+                       10000.0 * (1.0 - attention_mask)
     # Attention probabilities. [b, np, s, s]
     attention_probs = torch.nn.Softmax(dim=-1)(attention_scores)
 
@@ -672,7 +697,9 @@ def standard_attention(query_layer, key_layer, value_layer, attention_mask, atte
     context_layer = torch.matmul(attention_probs, value_layer)
     return context_layer
 
-def sparse_attention(q, k, v, pivot_idx, pivot_attention_mask, query_window=128, key_window_times=6, attention_dropout=None):
+
+def sparse_attention(q, k, v, pivot_idx, pivot_attention_mask, query_window=128, key_window_times=6,
+                     attention_dropout=None):
     ''' Sparse Attention
     Args:
         q, k, v: inputs, [b, num_heads, s, hn], k is padded to n * query_window
@@ -692,7 +719,8 @@ def sparse_attention(q, k, v, pivot_idx, pivot_attention_mask, query_window=128,
     attention_scores = torch.matmul(q, pivot_k.transpose(-1, -2))
     pivot_attention_mask = pivot_attention_mask.unsqueeze(1)
 
-    attention_scores_pivot = torch.mul(attention_scores, pivot_attention_mask / math.sqrt(hn)) - 10000.0 * (1.0 - pivot_attention_mask)
+    attention_scores_pivot = torch.mul(attention_scores, pivot_attention_mask / math.sqrt(hn)) - 10000.0 * (
+                1.0 - pivot_attention_mask)
 
     attention_scores_pivot = attention_scores_pivot + math.log(s // n_piv)
     # =====================   Window Attention   ======================= #
@@ -700,16 +728,18 @@ def sparse_attention(q, k, v, pivot_idx, pivot_attention_mask, query_window=128,
     window_v = _chunk(v, query_window, key_window_times)
     # window_k [b, n_head, s // w up int, w*times, hn]
 
-    if s % w == 0: # training # TODO args check
+    if s % w == 0:  # training # TODO args check
         assert k.shape[2] == s
         assert window_k.shape[2] == s // w
-        window_q = q.view(b, n_head, s // w, w, hn)        
+        window_q = q.view(b, n_head, s // w, w, hn)
         attention_scores = torch.matmul(window_q, window_k.transpose(-1, -2))
-        window_attention_mask = torch.ones((w, w * key_window_times), dtype=attention_scores.dtype, device=q.device).tril_(diagonal=w * (key_window_times - 1))
-        attention_scores_window = torch.mul(attention_scores, window_attention_mask / math.sqrt(hn)) - 10000.0 * (1.0 - window_attention_mask)
+        window_attention_mask = torch.ones((w, w * key_window_times), dtype=attention_scores.dtype,
+                                           device=q.device).tril_(diagonal=w * (key_window_times - 1))
+        attention_scores_window = torch.mul(attention_scores, window_attention_mask / math.sqrt(hn)) - 10000.0 * (
+                    1.0 - window_attention_mask)
         for t in range(1, key_window_times):
             attention_scores_window[:, :, t - 1, :, :w * key_window_times - w * t] -= 10000.0
-    else: 
+    else:
         raise ValueError('The seq_len must be exactly divided by window_size.')
     # =====================   Joint Softmax   ======================= #
     attention_scores_window = attention_scores_window.view(b, n_head, s, w * key_window_times)
@@ -720,9 +750,15 @@ def sparse_attention(q, k, v, pivot_idx, pivot_attention_mask, query_window=128,
         with get_cuda_rng_tracker().fork():
             attention_probs = attention_dropout(attention_probs)
 
-    context_layer = torch.matmul(attention_probs[..., :-w * key_window_times], pivot_v) + torch.einsum('bcgwk,bcgkh->bcgwh', attention_probs[..., -w * key_window_times:].view(b, n_head, s // w, w, w * key_window_times), window_v).view(b, n_head, s, hn)
+    context_layer = torch.matmul(attention_probs[..., :-w * key_window_times], pivot_v) + torch.einsum(
+        'bcgwk,bcgkh->bcgwh',
+        attention_probs[..., -w * key_window_times:].view(b, n_head, s // w, w, w * key_window_times), window_v).view(b,
+                                                                                                                      n_head,
+                                                                                                                      s,
+                                                                                                                      hn)
 
     return context_layer
+
 
 def sparse_attention_inference(q, k, v, pivot_and_window_idx, **kwargs):
     '''the inference process of sparse attention.
@@ -746,12 +782,11 @@ def sparse_attention_inference(q, k, v, pivot_and_window_idx, **kwargs):
 
     attention_probs = torch.nn.Softmax(dim=-1)(attention_scores)
 
-    context_layer = torch.matmul(attention_probs, pivot_v) 
+    context_layer = torch.matmul(attention_probs, pivot_v)
     return context_layer
 
 
-def test_sparse_attention():       
-
+def test_sparse_attention():
     s, w, times = 4096 + 128, 128, 2
     num_pivot = 768
     b = 2
@@ -759,22 +794,25 @@ def test_sparse_attention():
 
     q, k, v = raw = torch.rand(3, b, 16, s, 64, dtype=torch.float, device='cuda', requires_grad=True)
     q1, k1, v1 = raw1 = torch.tensor(raw.cpu().detach().numpy(), dtype=torch.float, device='cuda', requires_grad=True)
-    txt_indices = [torch.arange(0, 128, dtype=torch.long, device='cuda'), torch.arange(0, 22, dtype=torch.long, device='cuda')]
-    img_indices = [torch.arange(128, s, dtype=torch.long, device='cuda'), torch.arange(22, s, dtype=torch.long, device='cuda')]
+    txt_indices = [torch.arange(0, 128, dtype=torch.long, device='cuda'),
+                   torch.arange(0, 22, dtype=torch.long, device='cuda')]
+    img_indices = [torch.arange(128, s, dtype=torch.long, device='cuda'),
+                   torch.arange(22, s, dtype=torch.long, device='cuda')]
 
     pivot_idx = torch.stack([
         torch.cat((
             text_idx,
             img_indices[i][
-                torch.tensor(random.sample(range(len(img_indices[i]) - times*w),  k=num_pivot - len(text_idx)), dtype=torch.long, device=text_idx.device)
+                torch.tensor(random.sample(range(len(img_indices[i]) - times * w), k=num_pivot - len(text_idx)),
+                             dtype=torch.long, device=text_idx.device)
             ]
         ), dim=0)
         for i, text_idx in enumerate(txt_indices)
-    ]) # -times * w to verify inference
+    ])  # -times * w to verify inference
 
-    tmp = torch.ones((g-times+1, w , w), device='cuda', dtype=torch.long)
+    tmp = torch.ones((g - times + 1, w, w), device='cuda', dtype=torch.long)
     tmp = torch.tril(1 - torch.block_diag(*tmp))
-    rmask = torch.nn.functional.pad(tmp, (0, (times-1)*w, (times-1)*w, 0)) # pad (left, right, top, bottom)
+    rmask = torch.nn.functional.pad(tmp, (0, (times - 1) * w, (times - 1) * w, 0))  # pad (left, right, top, bottom)
 
     pivot_attention_mask = rmask.expand(b, s, s).gather(dim=-1, index=pivot_idx.unsqueeze(1).expand(b, s, num_pivot))
 
@@ -804,9 +842,9 @@ def test_sparse_attention():
     r2 = sparse_attention(q, k, v, pivot_idx, pivot_attention_mask, w, times)
     torch.cuda.synchronize()
     t2 = time.time()
-    print('times: standard ', t1-t0, ' sparse ', t2-t1)
+    print('times: standard ', t1 - t0, ' sparse ', t2 - t1)
 
-    print(( (r1-r2).abs() / (r1.abs()+r2.abs())).max())
+    print(((r1 - r2).abs() / (r1.abs() + r2.abs())).max())
 
     raw.retain_grad()
     l2 = r2.mean()
@@ -816,6 +854,8 @@ def test_sparse_attention():
 
     g1 = raw1.grad
     g2 = raw.grad
-    print( (g1-g2).abs().max())
+    print((g1 - g2).abs().max())
 
     # import pdb; pdb.set_trace()
+
+
