@@ -79,7 +79,7 @@ def get_model(args):
                       query_window=args.query_window,
                       key_window_times=args.key_window_times,
                       num_pivot=args.num_pivot
-                      ).half().cuda()
+                      ).cuda()
     print("CogView2 model built")
 
     if mpu.get_data_parallel_rank() == 0:
