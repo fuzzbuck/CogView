@@ -70,7 +70,7 @@ def setup_model(args):
 
             if args.offload:
                 print("converting cpu -> cuda")
-                model = model.half().cuda()
+                model = model.cuda()
             print(f"Load model file {path}")
         else:
             _ = load_checkpoint(
