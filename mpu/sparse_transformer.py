@@ -300,7 +300,7 @@ class GPT2ParallelTransformerLayer(torch.nn.Module):
             init_method,
             output_layer_init_method=output_layer_init_method,
             query_window=query_window,
-            key_window_times=key_window_times).half().cuda()
+            key_window_times=key_window_times).cuda()
 
         # Layernorm on the input data.
         self.post_attention_layernorm = LayerNorm(hidden_size,
@@ -460,7 +460,7 @@ class GPT2ParallelTransformer(torch.nn.Module):
                 query_window=query_window,
                 key_window_times=key_window_times,
                 scale_normalization=True
-            ).half().cuda()
+            ).cuda()
 
         self.query_window = query_window
         self.key_window_times = key_window_times

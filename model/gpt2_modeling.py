@@ -99,13 +99,13 @@ class GPT2Model(torch.nn.Module):
                                                        query_window=query_window,
                                                        key_window_times=key_window_times,
                                                        num_pivot=num_pivot
-                                                       ).half().cuda()
+                                                       ).cuda()
         print("transformer built")
 
         print("building word embeddings")
         # Word embeddings (parallel).
         self.word_embeddings = mpu.VocabParallelEmbedding(
-            vocab_size, hidden_size, init_method=init_method).half().cuda()
+            vocab_size, hidden_size, init_method=init_method).cuda()
         print("word embeddings built")
 
 
