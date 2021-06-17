@@ -1,3 +1,4 @@
+
 # coding=utf-8
 # Copyright (c) 2019, NVIDIA CORPORATION.  All rights reserved.
 #
@@ -83,10 +84,7 @@ class GPT2Model(torch.nn.Module):
 
         init_method = init_method_normal(std=0.02)
 
-        # Word embeddings (parallel).
-        self.word_embeddings = mpu.VocabParallelEmbedding(
-            vocab_size, hidden_size, init_method=init_method)
-
+        print("building transformer")
         # Transformer
         self.transformer = mpu.GPT2ParallelTransformer(num_layers,
                                                        hidden_size,
@@ -101,7 +99,16 @@ class GPT2Model(torch.nn.Module):
                                                        query_window=query_window,
                                                        key_window_times=key_window_times,
                                                        num_pivot=num_pivot
-                                                       )
+                                                       ).half().cuda()
+        print("transformer built")
+
+        print("building word embeddings")
+        # Word embeddings (parallel).
+        self.word_embeddings = mpu.VocabParallelEmbedding(
+            vocab_size, hidden_size, init_method=init_method).half().cuda()
+        print("word embeddings built")
+
+
 
     def forward(self, input_ids, position_ids, attention_mask, txt_indices_bool, img_indices_bool, is_sparse, *mems):
         # Embeddings.
@@ -121,3 +128,4 @@ class GPT2Model(torch.nn.Module):
             return (logits_parallel, *hidden_layers)
 
         return (mpu.gather_from_model_parallel_region(logits_parallel), *hidden_layers)
+

@@ -1,3 +1,4 @@
+
 # coding=utf-8
 # Copyright (c) 2019, NVIDIA CORPORATION.  All rights reserved.
 #
@@ -55,6 +56,7 @@ from data_utils import make_loaders, get_tokenizer, detect_new_datasets
 
 import stat
 
+
 def get_model(args):
     """Build the model."""
 
@@ -77,7 +79,8 @@ def get_model(args):
                       query_window=args.query_window,
                       key_window_times=args.key_window_times,
                       num_pivot=args.num_pivot
-                      )
+                      ).half().cuda()
+    print("CogView2 model built")
 
     if mpu.get_data_parallel_rank() == 0:
         print(' > number of parameters on model parallel rank {}: {}'.format(
@@ -95,6 +98,7 @@ def get_model(args):
     if args.fp16:
         model = FP16_Module(model)
 
+    print("wrapping for distributed pytorch")
     # Wrap model for distributed training.
     if not args.deepspeed:
         if USE_TORCH_DDP:
@@ -125,15 +129,15 @@ def get_optimizer_param_groups(model):
 def get_optimizer(param_groups, args):
     """Set up the optimizer."""
     if args.cpu_optimizer:
-        #Apex FusedAdam uses decoupled weight decay so use the same here
+        # Apex FusedAdam uses decoupled weight decay so use the same here
         if args.cpu_torch_adam:
             cpu_adam_optimizer = torch.optim.AdamW
         else:
-            #TODO add option for decoupled weight decay in DeepCPUAdam
+            # TODO add option for decoupled weight decay in DeepCPUAdam
             from deepspeed.ops.adam import DeepSpeedCPUAdam
             cpu_adam_optimizer = DeepSpeedCPUAdam
         optimizer = cpu_adam_optimizer(param_groups,
-                        lr=args.lr, weight_decay=args.weight_decay)
+                                       lr=args.lr, weight_decay=args.weight_decay)
     else:
         # Use FusedAdam.
         optimizer = Adam(param_groups,
@@ -208,8 +212,8 @@ def setup_model_and_optimizer(args):
 
 
 def get_masks_and_position_ids(data,
-                            loss_mask=None,
-                            attention_mask=None, args=None):
+                               loss_mask=None,
+                               attention_mask=None, args=None):
     # Extract batch size and sequence length.
     batch_size, seq_length = data.size()
 
@@ -235,15 +239,15 @@ def get_masks_and_position_ids(data,
             start_token_poses[x] = min(start_token_poses[x], y)
         assert 100000 not in start_token_poses, 'Some samples do not have [ROI2]!'
         position_ids = torch.zeros(batch_size, seq_length, dtype=torch.long,
-                                    device=data.device)
+                                   device=data.device)
         for i in range(batch_size):
             sep = start_token_poses[i]
-            torch.arange(start=0, end=sep, out=position_ids[i, :sep], 
-                dtype=torch.long, device=data.device)
-            second_pos = 0 # reuse
-            torch.arange(start=second_pos, end=second_pos + seq_length - sep, 
-                out=position_ids[i, sep:], 
-                dtype=torch.long, device=data.device)
+            torch.arange(start=0, end=sep, out=position_ids[i, :sep],
+                         dtype=torch.long, device=data.device)
+            second_pos = 0  # reuse
+            torch.arange(start=second_pos, end=second_pos + seq_length - sep,
+                         out=position_ids[i, sep:],
+                         dtype=torch.long, device=data.device)
         position_ids[position_ids >= args.max_position_embeddings] = args.max_position_embeddings - 1
     else:
         position_ids = torch.arange(seq_length, dtype=torch.long,
@@ -281,7 +285,7 @@ def get_batch(data_iterator, args, timers):
         loss_mask=loss_mask,
         attention_mask=attention_mask,
         args=args
-        )
+    )
     # Convert
     if args.fp16:
         attention_mask = attention_mask.half()
@@ -304,14 +308,15 @@ def forward_step(data_iterator, model, args, timers, mems):
     img_txt_sep = tokenizer.img_tokenizer.num_tokens
     img_indices_bool = (tokens.detach() < img_txt_sep)
     txt_indices_bool = (~img_indices_bool) & (loss_mask > 0)
- 
+
     # Forward model.
-    logits, *mems = model(tokens, position_ids, attention_mask, txt_indices_bool, img_indices_bool, args.is_sparse, *mems)
+    logits, *mems = model(tokens, position_ids, attention_mask, txt_indices_bool, img_indices_bool, args.is_sparse,
+                          *mems)
     losses = mpu.vocab_parallel_cross_entropy(logits.contiguous().float(),
                                               labels)
     # scaling loss mask
     loss_mask[txt_indices_bool] *= args.txt_loss_scale
-    loss_mask = loss_mask.view(-1)    
+    loss_mask = loss_mask.view(-1)
 
     # precalc outlier point, uncomment this if needed
     # if args.iteration > 10000:
@@ -319,7 +324,6 @@ def forward_step(data_iterator, model, args, timers, mems):
     #     if outliers.sum() > 0:
     #         print(f'Remove {outliers.sum()} outliers.')
     #         loss_mask[outliers] = 1e-4
-
 
     losses = losses.view(-1) * loss_mask
     loss = torch.sum(losses) / loss_mask.sum()
@@ -337,7 +341,7 @@ def forward_step(data_iterator, model, args, timers, mems):
     txt_loss.data = txt_loss.data / args.world_size
 
     # ===================== END OF BLOCK ======================= #
-    
+
     return loss, mems, img_loss, txt_loss
 
 
@@ -397,11 +401,12 @@ def see_memory_usage(message, force=False):
     dist.barrier()
     if dist.get_rank() == 0:
         print(message)
-        print("Memory Allocated ", torch.cuda.memory_allocated()/(1024*1024*1024), "GigaBytes")
-        print("Max Memory Allocated ", torch.cuda.max_memory_allocated()/(1024*1024*1024), "GigaBytes")
-        print("Cache Allocated ", torch.cuda.memory_cached()/(1024*1024*1024), "GigaBytes")
-        print("Max cache Allocated ", torch.cuda.max_memory_cached()/(1024*1024*1024), "GigaBytes")
+        print("Memory Allocated ", torch.cuda.memory_allocated() / (1024 * 1024 * 1024), "GigaBytes")
+        print("Max Memory Allocated ", torch.cuda.max_memory_allocated() / (1024 * 1024 * 1024), "GigaBytes")
+        print("Cache Allocated ", torch.cuda.memory_cached() / (1024 * 1024 * 1024), "GigaBytes")
+        print("Max cache Allocated ", torch.cuda.max_memory_cached() / (1024 * 1024 * 1024), "GigaBytes")
         print(" ")
+
 
 def train_step(data_iterator, model, optimizer, lr_scheduler,
                args, timers, mems):
@@ -448,7 +453,8 @@ def train_step(data_iterator, model, optimizer, lr_scheduler,
     return lm_loss_reduced, skipped_iter, mems, img_loss, txt_loss
 
 
-def report_iteration_metrics(summary_writer, optimizer, lr, loss, elapsed_time, step, total_step, args, img_loss, txt_loss):
+def report_iteration_metrics(summary_writer, optimizer, lr, loss, elapsed_time, step, total_step, args, img_loss,
+                             txt_loss):
     log_string = ' iteration {:8d}/{:8d} |'.format(step, total_step)
     log_string += ' elapsed time per iteration (ms): {:.1f} |'.format(elapsed_time)
     log_string += ' learning rate {:.3E} |'.format(lr)
@@ -505,12 +511,11 @@ def train(model, optimizer, lr_scheduler,
                 val_data_iterator = iter(new_loaders[1])
                 # TODO close the original
 
-
         lm_loss, skipped_iter, mems, img_loss, txt_loss = train_step(train_data_iterator,
-                                           model,
-                                           optimizer,
-                                           lr_scheduler,
-                                           args, timers, mems)
+                                                                     model,
+                                                                     optimizer,
+                                                                     lr_scheduler,
+                                                                     args, timers, mems)
         skipped_iters += skipped_iter
         args.iteration += 1
 
@@ -529,8 +534,8 @@ def train(model, optimizer, lr_scheduler,
 
             elapsed_time = timers('interval time').elapsed()
             report_iteration_metrics(summary_writer, optimizer, learning_rate, avg_lm_loss,
-                                    elapsed_time * 1000.0 / args.log_interval, args.iteration, args.train_iters, args,
-                                    avg_img_loss, avg_txt_loss)
+                                     elapsed_time * 1000.0 / args.log_interval, args.iteration, args.train_iters, args,
+                                     avg_img_loss, avg_txt_loss)
             total_lm_loss = 0.0
             total_img_loss = 0.0
             total_txt_loss = 0.0
@@ -553,7 +558,8 @@ def train(model, optimizer, lr_scheduler,
         if args.eval_interval and args.iteration % args.eval_interval == 0 and args.do_valid:
             prefix = 'iteration {}'.format(args.iteration)
             evaluate_and_print_results(
-                prefix, val_data_iterator, model, args, timers, False, step=args.iteration, summary_writer=summary_writer)
+                prefix, val_data_iterator, model, args, timers, False, step=args.iteration,
+                summary_writer=summary_writer)
 
         if args.exit_interval and args.iteration % args.exit_interval == 0:
             torch.distributed.barrier()
@@ -695,7 +701,7 @@ def get_train_val_test_data(args):
             after += 1
         print_rank_0('> padded vocab (size: {}) with {} dummy '
                      'tokens (new size: {})'.format(
-                         before, after - before, after))
+            before, after - before, after))
         token_counts = torch.cuda.LongTensor(
             [after, int(args.do_train), int(args.do_valid), int(args.do_test)])
     else:
@@ -788,6 +794,7 @@ def main():
             with ExitStack() as stack:
                 def save_on_exit(args_, model_, optimizer_, lr_scheduler_):
                     save_checkpoint(args_.iteration, model_, optimizer_, lr_scheduler_, args_)
+
                 # stack.callback(save_on_exit, args, model, optimizer, lr_scheduler)
                 iteration, skipped = train(model, optimizer,
                                            lr_scheduler,

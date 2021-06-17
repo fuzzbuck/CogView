@@ -1,3 +1,4 @@
+
 # coding=utf-8
 # Copyright (c) 2019, NVIDIA CORPORATION.  All rights reserved.
 #
@@ -56,8 +57,20 @@ def setup_model(args):
             iteration, release, success = get_checkpoint_iteration(args)
             path = os.path.join(args.load, str(iteration), "mp_rank_00_model_states.pt")
             print('current device:', torch.cuda.current_device())
-            checkpoint = torch.load(path, map_location=lambda storage, loc: storage.cuda(torch.cuda.current_device()))
-            model.load_state_dict(checkpoint["module"])
+
+            if not args.offload:
+                print("no offload, loading to cuda directly")
+                checkpoint = torch.load(path,
+                                        map_location=lambda storage, loc: storage.cuda(torch.cuda.current_device()))
+            else:
+                print("offloading model -> cpu")
+                checkpoint = torch.load(path, map_location=torch.device('cpu'))
+
+            # model.load_state_dict(checkpoint["module"])
+
+            if args.offload:
+                print("converting cpu -> cuda")
+                model = model.half().cuda()
             print(f"Load model file {path}")
         else:
             _ = load_checkpoint(
@@ -65,12 +78,14 @@ def setup_model(args):
 
     return model
 
+
 def _parse_and_to_tensor(text, img_size=256, query_template='{}'):
     tokenizer = get_tokenizer()
     text = query_template.format(*text.split('\t'))
     seq = tokenizer.parse_query(text, img_size=img_size)
     seq = torch.cuda.LongTensor(seq)
     return seq
+
 
 def get_context(args, query_template='{}'):
     tokenizer = get_tokenizer()
@@ -84,12 +99,12 @@ def get_context(args, query_template='{}'):
         if args.generation_task == 'post-selection':
             raise ValueError('post-selection only takes file inputs!')
         while True:
-            raw_text = input("\nPlease Input Query (stop to exit) >>> ") 
+            raw_text = input("\nPlease Input Query (stop to exit) >>> ")
             if not raw_text:
                 print('Query should not be empty!')
                 continue
             if raw_text == "stop":
-                return 
+                return
             try:
                 seq = _parse_and_to_tensor(raw_text, img_size=img_size, query_template=query_template)
             except (ValueError, FileNotFoundError) as e:
@@ -111,7 +126,7 @@ def get_context(args, query_template='{}'):
             raw_text = raw_text.strip()
             if len(raw_text) == 0:
                 continue
-            if args.with_id: # with id
+            if args.with_id:  # with id
                 parts = raw_text.split('\t')
                 output_path = os.path.join(args.output_path, parts[0])
                 raw_text = '\t'.join(parts[1:])
@@ -121,7 +136,8 @@ def get_context(args, query_template='{}'):
                 seqs = []
                 for part in parts[1:]:
                     try:
-                        seq_single = _parse_and_to_tensor('\t'.join([part, parts[0]]), img_size=img_size, query_template=query_template)
+                        seq_single = _parse_and_to_tensor('\t'.join([part, parts[0]]), img_size=img_size,
+                                                          query_template=query_template)
                         seqs.append(seq_single)
                     except (ValueError, FileNotFoundError) as e:
                         print(e)
@@ -135,7 +151,7 @@ def get_context(args, query_template='{}'):
                     continue
                 if len(seq) > ml:
                     print("\nSeq length", len(seq),
-                        f"\nPlease give smaller context than {ml}!")
+                          f"\nPlease give smaller context than {ml}!")
                     continue
             yield (raw_text, seq, output_path)
 
@@ -144,12 +160,13 @@ def generate_images_once(model, args, raw_text, seq=None, num=8, query_template=
     tokenizer = get_tokenizer()
     if not os.path.exists(output_path):
         os.makedirs(output_path)
-    if seq is None: # need parse
+    if seq is None:  # need parse
         img_size = 256 if args.generation_task != 'low-level super-resolution' else 128
         seq = _parse_and_to_tensor(raw_text, img_size=img_size, query_template=query_template)
     model.eval()
     with torch.no_grad():
         print('show raw text:', raw_text)
+        print("generating.. this could take up to 5 minutes depending on your GPU and specified batch size. drink some tea")
         start_time = time.time()
         if args.generation_task in ['text2image', 'low-level super-resolution']:
             invalid_slices = [slice(tokenizer.img_tokenizer.num_tokens, None)]
@@ -167,7 +184,7 @@ def generate_images_once(model, args, raw_text, seq=None, num=8, query_template=
             torch.cuda.empty_cache()
 
         output_tokens_list = torch.cat(output_tokens_list, dim=0)
-        
+
         print("\nTaken time {:.2f}\n".format(time.time() - start_time), flush=True)
         print("\nContext:", raw_text, flush=True)
         imgs, txts = [], []
@@ -179,14 +196,15 @@ def generate_images_once(model, args, raw_text, seq=None, num=8, query_template=
             if args.debug:
                 imgs.extend(decoded_imgs)
             else:
-                imgs.append(decoded_imgs[-1]) # only the last image (target)
+                imgs.append(decoded_imgs[-1])  # only the last image (target)
             txts.append(decoded_txts)
         if args.generation_task == 'image2text':
             print(txts)
-            return 
+            return
         if args.debug:
             output_file_prefix = raw_text.replace('/', '')[:20]
-            output_file = os.path.join(output_path, f"{output_file_prefix}-{datetime.now().strftime('%m-%d-%H-%M-%S')}.jpg")
+            output_file = os.path.join(output_path,
+                                       f"{output_file_prefix}-{datetime.now().strftime('%m-%d-%H-%M-%S')}.jpg")
             imgs = torch.cat(imgs, dim=0)
             print(txts)
             print("\nSave to: ", output_file, flush=True)
@@ -194,10 +212,11 @@ def generate_images_once(model, args, raw_text, seq=None, num=8, query_template=
         else:
             print("\nSave to: ", output_path, flush=True)
             for i in range(len(imgs)):
-                save_image(imgs[i], os.path.join(output_path,f'{i}.jpg'), normalize=True)
-                os.chmod(os.path.join(output_path,f'{i}.jpg'), stat.S_IRWXO+stat.S_IRWXG+stat.S_IRWXU)
-            save_image(torch.cat(imgs, dim=0), os.path.join(output_path,f'concat.jpg'), normalize=True)
-            os.chmod(os.path.join(output_path,f'concat.jpg'), stat.S_IRWXO+stat.S_IRWXG+stat.S_IRWXU)
+                save_image(imgs[i], os.path.join(output_path, f'{i}.jpg'), normalize=True)
+                os.chmod(os.path.join(output_path, f'{i}.jpg'), stat.S_IRWXO + stat.S_IRWXG + stat.S_IRWXU)
+            save_image(torch.cat(imgs, dim=0), os.path.join(output_path, f'concat.jpg'), normalize=True)
+            os.chmod(os.path.join(output_path, f'concat.jpg'), stat.S_IRWXO + stat.S_IRWXG + stat.S_IRWXU)
+
 
 def generate_images_continually(model, args):
     if args.generation_task == 'text2image':
@@ -220,6 +239,7 @@ def generate_images_continually(model, args):
         else:
             generate_images_once(model, args, raw_text, seq, num=args.batch_size, output_path=output_path)
 
+
 def super_resolution(model, args, raw_text, seq, output_path="./samples"):
     tokenizer = get_tokenizer()
     model.eval()
@@ -227,7 +247,7 @@ def super_resolution(model, args, raw_text, seq, output_path="./samples"):
         os.makedirs(output_path)
     with torch.no_grad():
         start_time = time.time()
-        output_tokens_list = magnify(model, tokenizer, seq[-32**2:], seq[:-32**2], args)
+        output_tokens_list = magnify(model, tokenizer, seq[-32 ** 2:], seq[:-32 ** 2], args)
 
         print("\nTaken time {:.2f}\n".format(time.time() - start_time), flush=True)
         print("\nContext:", raw_text, flush=True)
@@ -235,13 +255,15 @@ def super_resolution(model, args, raw_text, seq, output_path="./samples"):
         output_file = os.path.join(output_path, f"{output_file_prefix}-{datetime.now().strftime('%m-%d-%H-%M-%S')}.jpg")
         imgs = []
         if args.debug:
-            imgs.append(torch.nn.functional.interpolate(tokenizer.img_tokenizer.DecodeIds(seq[-32**2:]), size=(512, 512)))
+            imgs.append(
+                torch.nn.functional.interpolate(tokenizer.img_tokenizer.DecodeIds(seq[-32 ** 2:]), size=(512, 512)))
         for seq in output_tokens_list:
             decoded_txts, decoded_imgs = tokenizer.DecodeIds(seq.tolist())
             imgs.extend(decoded_imgs)
         imgs = torch.cat(imgs, dim=0)
         print("\nSave to: ", output_file, flush=True)
         save_image(imgs, output_file, normalize=True)
+
 
 def post_selection(model, args, raw_text, seq, output_path):
     tokenizer = get_tokenizer()
@@ -254,9 +276,9 @@ def post_selection(model, args, raw_text, seq, output_path):
         num = seq.shape[0]
         mbz = args.max_inference_batch_size
         assert num < mbz or num % mbz == 0
-        scores = [inverse_prompt_score(model, seq[tim*mbz:(tim+1)*mbz], args)
-            for tim in range(max(num // mbz, 1))
-            ]
+        scores = [inverse_prompt_score(model, seq[tim * mbz:(tim + 1) * mbz], args)
+                  for tim in range(max(num // mbz, 1))
+                  ]
         scores = torch.cat(scores, dim=0)
         # scores = inverse_prompt_score(model, seq, args) # once
 
@@ -265,14 +287,12 @@ def post_selection(model, args, raw_text, seq, output_path):
         rank = dist.get_rank()
         output_file = os.path.join(output_path, f"scores_rank_{rank}.txt")
         with open(output_file, 'a') as fout:
-            fout.write(raw_text+'\n')
-            fout.write('\t'.join([str(x) for x in scores.tolist()])+'\n')
+            fout.write(raw_text + '\n')
+            fout.write('\t'.join([str(x) for x in scores.tolist()]) + '\n')
         print("\nSave to: ", output_file, flush=True)
-       
 
-                
+
 def prepare_tokenizer(args):
-
     tokenizer = get_tokenizer(args)
 
     num_tokens = tokenizer.num_tokens
@@ -303,24 +323,28 @@ def main():
     # Arguments.
     args = get_args()
 
-    # Pytorch distributed.
-    initialize_distributed(args)
-
     # set device, this args.device is only used in inference
     if args.device is not None:
         device = int(args.device)
         torch.cuda.set_device(device)
 
+    # Pytorch distributed.
+    print("initialize_distributed()")
+    print("distributed_backend:", args.distributed_backend)
+    initialize_distributed(args)
+
     # Random seeds for reproducability.
     set_random_seed(args.seed)
+
+    # Model, optimizer, and learning rate.
+    model = setup_model(args)
+    print("model loaded, loading tokenizer")
 
     # get the tokenizer
     tokenizer = prepare_tokenizer(args)
 
-    # Model, optimizer, and learning rate.
-    model = setup_model(args)
-
     generate_images_continually(model, args)
+
 
 if __name__ == "__main__":
     main()
